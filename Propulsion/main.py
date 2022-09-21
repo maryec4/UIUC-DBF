@@ -12,7 +12,7 @@ def PropulsionCalc(fileName, Throttle, maxVel, drag, eCurrMax, eRes, cells, batV
         def pMotorOutCalc(motorAmp, batAmp):
 
             vBat = cells * batVolt - cells * batRes * batAmp         # Total Bat Volts w/ Volt Loss
-            vTerm = (vBat - eRes * batAmp) * Throttle / 100          # Volt Drop from esc/Throttle Val
+            vTerm = (vBat - eRes * batAmp) * Throttle / 100          # Volt Drop from esc/Throttle Val - voltage at terminal
             vDropMotor = motorAmp * mRes                             # Volt Drop from Motor
             pMotorIn = vTerm * batAmp                                # Power Motor Uses during Opt
             vEMF = vTerm - vDropMotor                                # Voltage Motor after losses
@@ -74,9 +74,6 @@ def PropulsionCalc(fileName, Throttle, maxVel, drag, eCurrMax, eRes, cells, batV
         pProp = Density * RPS**3 * propDia**5 * Cp         # Power Prop requires in kg * m^2 / s^3 (W)
         ThrustProp = Density * RPS**2 * propDia**4 * Ct    # Thrust Prop generates in kg*m/2  (N)
 
-        #if (Output == 1):
-        #    print('Export final parameters here')
-
         return pMotorIn, pMotorOut, pProp, vTerm, motorAmp, vBat, batAmp, ThrustProp, vEMF, RPM, torque
 
     # Pulling Prop Dia and Type
@@ -90,6 +87,7 @@ def PropulsionCalc(fileName, Throttle, maxVel, drag, eCurrMax, eRes, cells, batV
 
     #remove .dat from filename
     propType = removeBeginning[:len(removeBeginning) - 4]
+    
     #remove paranthesis from propType, messes up regular expressions
     propType = re.sub(r'\([^)]*\)', '', propType)
     
@@ -104,7 +102,12 @@ def PropulsionCalc(fileName, Throttle, maxVel, drag, eCurrMax, eRes, cells, batV
     header_list = [str(x) for x in range(13)]
 
     # Read file
-    propData = pd.read_csv(fileName, sep = '\s+', names = header_list)
+    try:
+        propData = pd.read_csv(fileName, sep = '\s+', names = header_list)
+    except:
+        header_list = [str(x) for x in range(14)]
+        propData = pd.read_csv(fileName, sep = '\s+', names = header_list)
+        
     propData = propData.to_numpy()
     df = pd.DataFrame(propData)
     df.to_csv(index = False)
@@ -114,6 +117,9 @@ def PropulsionCalc(fileName, Throttle, maxVel, drag, eCurrMax, eRes, cells, batV
     mask = np.column_stack([df[col].str.contains(r'' + searchString, na = False)
                             for col in df])
     RPMdata = pd.DataFrame.dropna(df.loc[mask.any(axis = 1)], axis = 1)
+    
+    
+    
     """
     Create New Table to bin RPM Values into Groups
     Remove Characters from PROP RPM
@@ -133,10 +139,6 @@ def PropulsionCalc(fileName, Throttle, maxVel, drag, eCurrMax, eRes, cells, batV
     # Delete Unnecessary Top Rows
     RPMdf = df.iloc[indexinRPM:]
 
-    # Get Max RPM and Index
-    #maxRPM = RPMs.max()
-    #indexMaxRPM = RPMs[a[0]].idxmax()
-
     # Get Index of Each RPM Value to Bin Data
     RPMindex = RPMs.index
 
@@ -145,6 +147,7 @@ def PropulsionCalc(fileName, Throttle, maxVel, drag, eCurrMax, eRes, cells, batV
 
     # Add Index of Last Row of Database ot RPM DF to Bin
     lastIndex = RPMdf.iloc[[-1]].index.values[0]
+    
     # Get Index of RPMs ot Group by RPM
     RPMindex = np.append(RPMindex, lastIndex)
     RPMlabel = RPMs[a[0]].to_list()
@@ -165,6 +168,7 @@ def PropulsionCalc(fileName, Throttle, maxVel, drag, eCurrMax, eRes, cells, batV
     RPMdf = RPMdf.groupby(pd.cut(RPMdf.index, RPMindex,
                                  right = False, labels = RPMlabel))
     
+    
     """ First Calculations """
     RPMgroups = np.array(list(RPMdf.groups))
 
@@ -178,6 +182,7 @@ def PropulsionCalc(fileName, Throttle, maxVel, drag, eCurrMax, eRes, cells, batV
 
     velocityArray = [0]
     velocityStep = 1.524
+    
     
     """ Final Calculations """
 
@@ -210,13 +215,13 @@ def PropulsionCalc(fileName, Throttle, maxVel, drag, eCurrMax, eRes, cells, batV
         if (velocity != 0):
             velocityArray.append(velocity)
 
-        timeRun = 0   # Counts how many times Loop iterates
         try:
             pMotorIn, pMotorOut, pProp, vTerm, motorAmp, vBat, batAmp, ThrustProp, vEMF, RPM, Torque = RPMfinder(InitMotorGuess, InitBatGuess, 0, velocity)
         
         except AssertionError:
             return None
-
+        
+        counter = 0
         while (abs(pProp - pMotorOut) > powerTolerance):
             
             try:
@@ -230,14 +235,15 @@ def PropulsionCalc(fileName, Throttle, maxVel, drag, eCurrMax, eRes, cells, batV
                 return None
 
             pESCOut = pMotorIn
-           # vESCin = (cells * batVolt) - (cells * batRes * batAmp)
+            vESCin = (cells * batVolt) - (cells * batRes * batAmp)
             vESCout = (cells * batVolt) - (cells * batRes + mRes) * batAmp
             InitMotorGuess = pProp / vEMF + nLCurr
             InitBatGuess = pESCOut / vESCout
-
-            timeRun = timeRun + 1
-            #print("T" + str(timeRun))
-            #print('Iteration: ' + str(timeRun) + '     Velocity: '+ str(velocityArray[velocityPosition])+' m\s')
+            
+            if counter > 1000:
+                return None
+            else:
+                counter += 1
 
         # Runs one More Time (Could Keep previous motorAmp/BatAmp values, they are close to new)
         try:
@@ -245,7 +251,7 @@ def PropulsionCalc(fileName, Throttle, maxVel, drag, eCurrMax, eRes, cells, batV
         except AssertionError:
             return None
         
-        if ThrustProp > drag:
+        if (ThrustProp*0.224809) > drag:
             boo = True
         
         if velocity > maxVel:
@@ -258,7 +264,7 @@ def PropulsionCalc(fileName, Throttle, maxVel, drag, eCurrMax, eRes, cells, batV
         velocityPosition += 1
         velocity += velocityStep
         
-        if velocity < 100:
+        if velocity > 100:
             return resultProp
     
     #if (velocity < maxVel):
@@ -274,6 +280,7 @@ def PropulsionCalc(fileName, Throttle, maxVel, drag, eCurrMax, eRes, cells, batV
     # Removing Last Row b/c FN is 0 so results may be Invalid
     resultProp.drop(resultProp.tail(1).index, inplace = True)
     
+    print(resultProp.to_string())
     return resultProp
 
 def PackageGen(maxVel, drag):
@@ -287,30 +294,25 @@ def PackageGen(maxVel, drag):
     # Finding Number of Motors/Bats for Iteration
     mDFSize = len(mDF)
     batDFSize = len(batDF)    
-    
-    # Propulsion Data Excel File
-    #ExcelFileName = "PropData.xlsx"
-    #writer = pd.ExcelWriter(ExcelFileName, engine = 'openpyxl', mode = "a", if_sheet_exists='overlay')
-    
+
     #esc information
     eCurrMax = 120     #max current of esc
     eRes = 0.004      #esc resistance in ohms
     
     # General Data
     batRes = 0.0028
-    Throttle = 100
+    Throttle = 99
     
+    '''
+    Looping through motors, bats,
+    and props for package data
+    '''
     
+    # Looping Motors
     for i in range(mDFSize):
 
         # Motor Data
         mName, kv, nLCurr, mRes = mDF.iloc[i, 0:4]
-        #mWeight = mDF.iloc[i, 5]
-        
-        motorData = []
-        
-        #wb = load_workbook('PropData.xlsx')
-        #wb.create_sheet(mName)
         
         parent_dir = "C:/Users/marym/OneDrive/Documents/Propulsion"
         directory = mName
@@ -318,12 +320,11 @@ def PackageGen(maxVel, drag):
         path = os.path.join(parent_dir, directory)
         os.mkdir(path)
         
+        # Looping Batteries
         for i in range(batDFSize):
-            #print("batt")
+
             # Battery Data
             batName, cells, batVolt = batDF.iloc[i, 0:3]
-            #batWeight = batRow['c5']
-            batData = []
             
             parent_dir = directory
             directoryBat = batName
@@ -331,39 +332,15 @@ def PackageGen(maxVel, drag):
             path = os.path.join(parent_dir, directoryBat)
             os.mkdir(path)
             
-            # Setting up Sheet for Specific Bat/Motor Config
-            #sheet_name = batName + "_" + mName
-            #wb.save('PropData.xlsx')
-            
-            #reader = pd.read_excel(ExcelFileName, sheet_name = mName, engine = "openpyxl")
-            #ws = writer.sheets[sheet_name]
-            #ws.write(len(reader) + 2, 0, 0)
-            
+            # Looping through Props
             for prop in os.listdir(propdir):
-                #print("props")
                 print(str(prop))
-                
                 propName = "C:/Users/marym/OneDrive/Documents/Propulsion/propellers/" + prop  
                 
-                resultProp = PropulsionCalc(propName, Throttle, maxVel, drag, eCurrMax, eRes, cells, batVolt, kv, batRes, nLCurr, mRes, Density = 1.225, alt = 0)
-                
-                if resultProp is None:
-                    print("Fail")
-                    continue
+                resultProp = PropulsionCalc(propName, Throttle, maxVel, drag, eCurrMax, eRes, cells, batVolt, kv, batRes, nLCurr, mRes, Density = 1.225*.84, alt = 0)
                 
                 resultProp.to_csv(path+"/"+prop)
-                
-                
-                print("Going to List")
-        print("Finished With a Motor")
-        
-        for files in motorData:
-            pd.concat(files).to_csv(mName)
         
         
 print("Starting")
-#fileName = "propellers/PER3_7x6E.dat"
-#resultProp = PropulsionCalc(fileName, 100.0, 10.0, 20, 120.0, 0.004, 6.0, 3.7, 295.0, 0.0028, 1.7, 0.015, Density = 1.225*.84)
-#print(resultProp)
-
 PackageGen(33, 15) # input drag at lbs
