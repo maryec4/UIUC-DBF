@@ -14,14 +14,14 @@ def PropulsionCalc(fileName, Throttle, maxVel, drag, eCurrMax, eRes, cells, batV
             vBat = cells * batVolt - cells * batRes * batAmp         # Total Bat Volts w/ Volt Loss
             vTerm = (vBat - eRes * batAmp) * Throttle / 100          # Volt Drop from esc/Throttle Val - voltage at terminal
             vDropMotor = motorAmp * mRes                             # Volt Drop from Motor
-            pMotorIn = vTerm * batAmp                                # Power Motor Uses during Opt
             vEMF = vTerm - vDropMotor                                # Voltage Motor after losses
             pMotorOut = vEMF * (motorAmp - nLCurr)                   # Power Motor Generates (Voltage of Motor * (Amps of Motor - No Load Motor Amps))
-            pMotorIn = vTerm * (motorAmp)# - nLCurr)                 # Power Motor Receives
+            pMotorIn = vTerm * batAmp                            # Power Motor Receives
 
             return pMotorIn, pMotorOut, vTerm, motorAmp, vBat, batAmp, vEMF
 
         pMotorIn, pMotorOut, vTerm, motorAmp, vBat, batAmp, vEMF = pMotorOutCalc(motorAmpGuess, batAmpGuess)
+        #pMotorOut = 1210.83
 
         RPM = vEMF * kv                # Revolutions/Min of Motor
         RPS = RPM / 60                 # Revolutions/s of Motor
@@ -39,7 +39,7 @@ def PropulsionCalc(fileName, Throttle, maxVel, drag, eCurrMax, eRes, cells, batV
         bottomRPMdata = RPMdf.get_group(bottomRPM).reset_index()
         topRPMdata = RPMdf.get_group(topRPM).reset_index()
 
-        velocityMPH = velocity * 2.23694      # Conversion to MPH
+        velocityMPH = velocity * 0.68181818      # Conversion to MPH
 
         # Finding Relevant Indices
         bottomRPMClosestVel = abs(bottomRPMdata['V'] - velocityMPH).idxmin()
@@ -54,8 +54,8 @@ def PropulsionCalc(fileName, Throttle, maxVel, drag, eCurrMax, eRes, cells, batV
         topCp = topRPMdata['Cp'].iloc[topRPMClosestVel]
 
         # Finding Torque
-        bottomTorque = bottomRPMdata['Torque'].iloc[bottomRPMClosestVel]
-        topTorque = topRPMdata['Torque'].iloc[topRPMClosestVel]
+        bottomTorque = bottomRPMdata['Torque'].iloc[:,0].iloc[bottomRPMClosestVel]
+        topTorque = topRPMdata['Torque'].iloc[:,0].iloc[topRPMClosestVel]
 
         # Interpolate to get Coefficient of Power/Thrust for Motor RPM
         Cp = bottomCp + (RPM - bottomRPM) * (topCp - bottomCp) / (topRPM - bottomRPM)
@@ -63,10 +63,11 @@ def PropulsionCalc(fileName, Throttle, maxVel, drag, eCurrMax, eRes, cells, batV
         torque = bottomTorque + (RPM - bottomRPM) * (topTorque - bottomTorque) / (topRPM - bottomRPM)
 
         # Prop Power/Thrust Calc
-        pProp = Density * RPS**3 * propDia**5 * Cp         # Power Prop required ft-lb/s
-        ThrustProp = Density * RPS**2 * propDia**4 * Ct    # Thrust Prop generates in lbf
-
-        return pMotorIn, pMotorOut, pProp, vTerm, motorAmp, vBat, batAmp, ThrustProp, vEMF, RPM, torque
+        pProp = Density * RPS**3 * propDia**5 * Cp       # Power Prop required ft-lb/s
+        ThrustProp = Density * RPS**2 * propDia**4 * Ct             # Thrust Prop generates in lbf
+        # print('pMotorIn, pMotorOut, pProp, vTerm, motorAmp, vBat, batAmp, ThrustProp, vEMF, RPM, torque, Cp, Ct')
+        # print(pMotorIn, pMotorOut, pProp, vTerm, motorAmp, vBat, batAmp, ThrustProp, vEMF, RPM, torque, Cp, Ct)
+        return pMotorIn, pMotorOut, pProp, vTerm, motorAmp, vBat, batAmp, ThrustProp, vEMF, RPM, torque, Cp, Ct
 
     # Pulling Prop Dia and Type
     firstword = "PER3_"
@@ -97,7 +98,7 @@ def PropulsionCalc(fileName, Throttle, maxVel, drag, eCurrMax, eRes, cells, batV
     try:
         propData = pd.read_csv(fileName, sep = '\s+', names = header_list)
     except:
-        header_list = [str(x) for x in range(14)]
+        header_list = [str(x) for x in range(15)]
         propData = pd.read_csv(fileName, sep = '\s+', names = header_list)
         
     propData = propData.to_numpy()
@@ -156,6 +157,7 @@ def PropulsionCalc(fileName, Throttle, maxVel, drag, eCurrMax, eRes, cells, batV
     # Removes All Non-Numeric Rows
     RPMdf = RPMdf.apply(lambda x: pd.to_numeric(x, errors = 'coerce')).dropna()
 
+
     # Group Each RPM
     RPMdf = RPMdf.groupby(pd.cut(RPMdf.index, RPMindex,
                                  right = False, labels = RPMlabel))
@@ -173,17 +175,17 @@ def PropulsionCalc(fileName, Throttle, maxVel, drag, eCurrMax, eRes, cells, batV
     """ Calculations """
 
     velocityArray = [0]
-    velocityStep = 5 #ft/s
+    velocityStep = 5        #ft/s
 
-    InitMotorGuess = nLCurr + 0.1    # Make First Motor Amp Draw Guess
-    InitBatGuess = nLCurr + 0.1     # No Load Amp Draw for Motor
+    InitMotorGuess = 2    # Make First Motor Amp Draw Guess
+    InitBatGuess = 2     # No Load Amp Draw for Motor
 
 
     # Dataframe for Storing Final Results
     resultDF = []
 
-    powerTol = 0.01
-    relaxPara = 0.45
+    powerTol = 0.0001
+    relaxPara = .45
     
     velocity = 0
     velocityArray.append(velocity)
@@ -191,27 +193,63 @@ def PropulsionCalc(fileName, Throttle, maxVel, drag, eCurrMax, eRes, cells, batV
     ThrustProp = 1
     c2 = 0
 
+    nLEMF = (cells*batVolt - nLCurr*(batRes*cells + eRes))*Throttle/100 - mRes*nLCurr
+    nLRPM = kv*nLEMF
+
+    bottomRPM = RPMgroups[RPMgroups < nLRPM].max()
+    topRPM = RPMgroups[RPMgroups > nLRPM].min()
+
+    # Get Bottom/Top RPM Groups
+    bottomRPMdata = RPMdf.get_group(bottomRPM).reset_index()
+    topRPMdata = RPMdf.get_group(topRPM).reset_index()
+
+    velocityMPH = velocity * 2.23694      # Conversion to MPH
+
+    # Finding Relevant Indices
+    bottomRPMClosestVel = abs(bottomRPMdata['V'] - velocityMPH).idxmin()
+    topRPMClosestVel = abs(topRPMdata['V'] - velocityMPH).idxmin()
+
+    # Finding Cp
+    bottomCp = bottomRPMdata['Cp'].iloc[bottomRPMClosestVel]
+    topCp = topRPMdata['Cp'].iloc[topRPMClosestVel]
+
+    # Interpolate to get Coefficient of Power/Thrust for Motor RPM
+    nLCp = bottomCp + (nLRPM - bottomRPM) * (topCp - bottomCp) / (nLRPM - bottomRPM)
+
+    nLpProp = Density * (nLRPM/60)**3 * (propDia)**5 * nLCp
+
+    nLpProp *= 1.35581795
+
     while ThrustProp > 0:
 
         counter = 0
 
-        pMotorIn, pMotorOut, pProp, vTerm, motorAmp, vBat, batAmp, ThrustProp, vEMF, RPM, Torque = RPMfinder(InitMotorGuess, InitBatGuess, 0, velocity)
+        pMotorIn, pMotorOut, pProp, vTerm, motorAmp, vBat, batAmp, ThrustProp, vEMF, RPM, Torque, Cp, Ct = RPMfinder(InitMotorGuess, InitBatGuess, 0, velocity)
 
-        if abs(pProp - pMotorOut) < powerTol and ThrustProp > 0:
-            break
+        InitMotorGuess = 2
+        InitBatGuess = 2
 
-        while abs(pProp - pMotorOut) > powerTol:
+        while abs(pProp * 1.35581795 - pMotorOut) > powerTol:
             
-            pMotorIn, pMotorOut, pProp, vTerm, motorAmp, vBat, batAmp, ThrustProp, vEMF, RPM, Torque = RPMfinder(InitMotorGuess, InitBatGuess, 0, velocity)
+            pMotorIn, pMotorOut, pProp, vTerm, motorAmp, vBat, batAmp, ThrustProp, vEMF, RPM, Torque, Cp, Ct = RPMfinder(InitMotorGuess, InitBatGuess, 0, velocity)
 
-            pESCOut = pMotorIn
             aMotorGuess = pProp/vEMF + nLCurr
-            aBatGuess = pESCOut/(vBat - batAmp*eRes)
+            aBatGuess = vTerm * motorAmp / (batVolt * cells - batAmp * (eRes + batRes))
 
             InitMotorGuess = (aMotorGuess - InitMotorGuess) * relaxPara + InitMotorGuess
             InitBatGuess = (aBatGuess - InitBatGuess) * relaxPara + InitBatGuess
 
-            if counter > 1000:
+            InitBatGuess = vTerm * motorAmp / (batVolt * cells - batAmp * (eRes + batRes*cells))
+
+            convergence = pProp*1.35581795 - pMotorOut
+            InitMotorGuess = ((motorAmp-nLCurr)/(convergence-nLpProp)*(0-nLpProp)+nLCurr)*relaxPara+(1-relaxPara)*motorAmp
+
+            if InitMotorGuess < nLCurr:
+                InitMotorGuess = nLCurr + 0.01
+            if InitBatGuess < nLCurr:
+                InitBatGuess = nLCurr + 0.01
+
+            if counter > 100:
                 break
             else:
                 counter += 1
@@ -219,7 +257,7 @@ def PropulsionCalc(fileName, Throttle, maxVel, drag, eCurrMax, eRes, cells, batV
         efficiency = pMotorOut / pMotorIn
 
         resultDF.append([Throttle, Density, velocity, ThrustProp, Torque, RPM, batAmp, pProp, efficiency])
-        #print(resultDF)
+        print(resultDF)
         velocity += velocityStep
 
     resultDF = pd.DataFrame(resultDF, columns=['Throttle','Air Density (slugs/ft^3)', 'Velocity (ft/s)', 'Thrust (lbs)', 'Torque (in-lbf)', 'RPM (rev/min)', 'Battery Current (A)', 'Power (W)', 'Efficiency'])
@@ -230,32 +268,28 @@ def PropulsionCalc(fileName, Throttle, maxVel, drag, eCurrMax, eRes, cells, batV
 
 print("Starting")
 # PackageGen(33, 15) # input drag at lbs
-propName = "C:/Users/marym/OneDrive/Documents/UIUC-DBF-main/Propulsion/propellors/PER3_19x12E.dat"
+propName = "C:/Users/marym/OneDrive/Documents/UIUC-DBF-main/Propulsion/propellors/PER3_19x12E2.dat"
 path = "C:/Users/marym/OneDrive/Documents/UIUC-DBF-main/Propulsion/Prototype 0 - Stephanie"
 
 
 
 # name = "Scorpion  SII-3026-710KV"
-# resultProp = pd.DataFrame(columns = ['Throttle', "Velocity (ft/s)", "Air Density (kg/m^3)", "Battery Current (A)", "RPM (rev/min)", "Thrust (N)", "Power (W)", "Efficiency", "Torque (in-lbf)"])
-# resultProp.columns.name = 'Velocity (m/s)'
+# resultProp = pd.DataFrame(columns = ['Throttle','Air Density (slugs/ft^3)', 'Velocity (ft/s)', 'Thrust (lbs)', 'Torque (in-lbf)', 'RPM (rev/min)', 'Battery Current (A)', 'Power (W)', 'Efficiency'])
 # for i in range(20,105,5):
 #     resultProp = pd.concat([resultProp, PropulsionCalc(propName, i, 100, 0, 120, 0.004, 3, 3.7, 710, 0.006, 1.56, 0.022)])
 # resultProp.to_csv(path + "/" + name)
 
 
 
-# name = "Hacker A60 5S (2023)"
-# resultProp = pd.DataFrame(columns = ['Throttle', "Velocity (ft/s)", "Air Density (kg/m^3)", "Battery Current (A)", "RPM (rev/min)", "Thrust (N)", "Power (W)", "Efficiency", "Torque (in-lbf)"])
-# resultProp.columns.name = 'Velocity (m/s)'
-# for i in range(20,105,5):
-#     resultProp = pd.concat([resultProp, PropulsionCalc(propName, i, 100, 0, 120, 0.004, 6, 3.7, 295, 0.006, 1.7, 0.015)])
-# resultProp.to_csv(path + "/" + name)
+name = "Hacker A60 5S (2023)"
+resultProp = pd.DataFrame(columns = ['Throttle','Air Density (slugs/ft^3)', 'Velocity (ft/s)', 'Thrust (lbs)', 'Torque (in-lbf)', 'RPM (rev/min)', 'Battery Current (A)', 'Power (W)', 'Efficiency'])
+resultProp = pd.concat([resultProp, PropulsionCalc(propName, 100, 100, 0, 120, 0.004, 6, 3.7, 295, 0.0028, 1.7, 0.015)])
+resultProp.to_csv(path + "/" + name)
 
 
 
 # name = "Scorpion A-4225-500kv"
-# resultProp = pd.DataFrame(columns = ['Throttle', "Velocity (ft/s)", "Air Density (kg/m^3)", "Battery Current (A)", "RPM (rev/min)", "Thrust (N)", "Power (W)", "Efficiency", "Torque (in-lbf)"])
-# resultProp.columns.name = 'Velocity (m/s)'
+# resultProp = pd.DataFrame(columns = ['Throttle','Air Density (slugs/ft^3)', 'Velocity (ft/s)', 'Thrust (lbs)', 'Torque (in-lbf)', 'RPM (rev/min)', 'Battery Current (A)', 'Power (W)', 'Efficiency'])
 # for i in range(20,105,5):
 #     resultProp = pd.concat([resultProp, PropulsionCalc(propName, i, 100, 0, 120, 0.004, 6, 3.7, 500, 0.006, 1.54, 0.014)])
 # resultProp.to_csv(path + "/" + name)
@@ -263,8 +297,7 @@ path = "C:/Users/marym/OneDrive/Documents/UIUC-DBF-main/Propulsion/Prototype 0 -
 
 
 # name = "Scorpion SII-4020-540KV"
-# resultProp = pd.DataFrame(columns = ['Throttle', "Velocity (ft/s)", "Air Density (kg/m^3)", "Battery Current (A)", "RPM (rev/min)", "Thrust (N)", "Power (W)", "Efficiency", "Torque (in-lbf)"])
-# resultProp.columns.name = 'Velocity (m/s)'
+# resultProp = pd.DataFrame(columns = ['Throttle','Air Density (slugs/ft^3)', 'Velocity (ft/s)', 'Thrust (lbs)', 'Torque (in-lbf)', 'RPM (rev/min)', 'Battery Current (A)', 'Power (W)', 'Efficiency'])
 # for i in range(20,105,5):
 #     resultProp = pd.concat([resultProp, PropulsionCalc(propName, i, 100, 0, 120, 0.004, 6, 3.7, 540, 0.006, 1.22, 0.020)])
 # resultProp.to_csv(path + "/" + name)
@@ -272,8 +305,7 @@ path = "C:/Users/marym/OneDrive/Documents/UIUC-DBF-main/Propulsion/Prototype 0 -
 
 
 # name = "Scorpion SII-4020-420KV"
-# resultProp = pd.DataFrame(columns = ['Throttle', "Velocity (ft/s)", "Air Density (kg/m^3)", "Battery Current (A)", "RPM (rev/min)", "Thrust (N)", "Power (W)", "Efficiency", "Torque (in-lbf)"])
-# resultProp.columns.name = 'Velocity (m/s)'
+# resultProp = pd.DataFrame(columns = ['Throttle','Air Density (slugs/ft^3)', 'Velocity (ft/s)', 'Thrust (lbs)', 'Torque (in-lbf)', 'RPM (rev/min)', 'Battery Current (A)', 'Power (W)', 'Efficiency'])
 # for i in range(20,105,5):
 #     resultProp = pd.concat([resultProp, PropulsionCalc(propName, i, 100, 0, 120, 0.004, 6, 3.7, 420, 0.006, 0.91, 0.032)])
 # resultProp.to_csv(path + "/" + name)
@@ -281,20 +313,18 @@ path = "C:/Users/marym/OneDrive/Documents/UIUC-DBF-main/Propulsion/Prototype 0 -
 
 
 # name = "Scorpion SII-4020-630KV"
-# resultProp = pd.DataFrame(columns = ['Throttle', "Velocity (ft/s)", "Air Density (kg/m^3)", "Battery Current (A)", "RPM (rev/min)", "Thrust (N)", "Power (W)", "Efficiency", "Torque (in-lbf)"])
-# resultProp.columns.name = 'Velocity (m/s)'
+# resultProp = pd.DataFrame(columns = ['Throttle','Air Density (slugs/ft^3)', 'Velocity (ft/s)', 'Thrust (lbs)', 'Torque (in-lbf)', 'RPM (rev/min)', 'Battery Current (A)', 'Power (W)', 'Efficiency'])
 # for i in range(20,105,5):
 #     resultProp = pd.concat([resultProp, PropulsionCalc(propName, i, 100, 0, 120, 0.004, 6, 3.7, 630, 0.006, 1.54, 0.015)])
 # resultProp.to_csv(path + "/" + name)
 
 
 
-name = "Scorpion SII-4025-330KV"
-resultProp = pd.DataFrame(columns = ['Throttle', "Velocity (ft/s)", "Air Density (kg/m^3)", "Battery Current (A)", "RPM (rev/min)", "Thrust (N)", "Power (W)", "Efficiency", "Torque (in-lbf)"])
-resultProp.columns.name = 'Velocity (m/s)'
-for i in range(20,105,5):
-    resultProp = pd.concat([resultProp, PropulsionCalc(propName, i, 100, 0, 120, 0.004, 6, 3.7, 330, 0.006, 0.74, 0.037)])
-resultProp.to_csv(path + "/" + name)
+# name = "Scorpion SII-4025-330KV"
+# resultProp = pd.DataFrame(columns = ['Throttle','Air Density (slugs/ft^3)', 'Velocity (ft/s)', 'Thrust (lbs)', 'Torque (in-lbf)', 'RPM (rev/min)', 'Battery Current (A)', 'Power (W)', 'Efficiency'])
+# for i in range(20,105,5):
+#     resultProp = pd.concat([resultProp, PropulsionCalc(propName, i, 100, 0, 120, 0.004, 6, 3.7, 330, 0.006, 0.74, 0.037)])
+# resultProp.to_csv(path + "/" + name)
 
 print("Done")
 # path = "C:/Users/marym/OneDrive/Documents/UIUC-DBF-main/Propulsion/Prototype 0 - Stephanie"
